@@ -35,8 +35,6 @@ extern "C" {
 
 #define MAX_BUFFER_SIZE 128
 #define EPOLL_TIMEOUT 60000 // milliseconds
-#define MAX_SESSION_NUM 64
-
 
 typedef int(*set_frame)(rtsp_session_handle session, const uint8_t *frame, int len, uint64_t ts);
 
@@ -192,7 +190,6 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 
-			msg_len = ((unsigned int *)(map_addr + 64))[p->msg_offset];
 #if 0
 			printf("type: %s, msglen: 0x%x\n", p->stream_path, msg_len);
 			for (int i = 0; i < 1024; i++) {
@@ -200,20 +197,12 @@ int main(int argc, char *argv[]) {
 			}
 			printf("\n====================\n");
 #endif
-			if (unlikely(msg_len < 32)) {
-				printf("msg too short\n");
-				continue;
+			msg_len = ((unsigned int *)(map_addr + 64))[p->msg_offset];
+			if (!p->stream_path) { /* audio only send main */
+				(p->callback)(p->session, (const uint8_t *)(map_addr+96 +320), msg_len/2, ts);
 			}
 			else {
-				if (likely(p->session)) {
-					//(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len == 0x280 ? msg_len/2 : msg_len, ts);
-					if (!p->stream_path) { /* audio only send main */
-						(p->callback)(p->session, (const uint8_t *)(map_addr+96 +320), msg_len/2, ts);
-					}
-					else {
-						(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
-					}
-				}
+				(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
 			}
 
 			munmap(map_addr, map_len);
@@ -241,8 +230,9 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 		close(p->fd);
-		if (p->session)
+		if (p->stream_path) {
 			rtsp_del_session(p->session);
+		}
 	}
 
 	close(epoll_fd);
