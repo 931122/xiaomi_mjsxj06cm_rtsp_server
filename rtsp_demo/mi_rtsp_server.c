@@ -42,17 +42,18 @@ typedef int(*set_frame)(rtsp_session_handle session, const uint8_t *frame, int l
 
 struct mi_stream_info {
 	const char *unix_path;
-	const char *stream_type;
-	set_frame callback;
+	const char *stream_path;
+	const set_frame callback;
+	const int msg_offset;
 	bool enabled;
 	int fd;
 	int ch;
 	struct epoll_event ev;
 	rtsp_session_handle session;
 } mi_info[3] = {
-	{ "/run/video_mainstream/control", "/main", rtsp_tx_video, true },
-	{ "/run/video_substream/control", "/sub", rtsp_tx_video, true },
-	{ "/var/run/audio_in/control", "", rtsp_tx_audio, false}
+	{ "/run/video_mainstream/control", "/main", rtsp_tx_video, 4, true },
+	{ "/run/video_substream/control", "/sub", rtsp_tx_video, 4, true },
+	{ "/var/run/audio_in/control", NULL, rtsp_tx_audio, 6, true}
 };
 
 static int flag_run = 1;
@@ -145,20 +146,21 @@ int main(int argc, char *argv[]) {
 		if (ret < 0) {
 			printf("epoll add %s error\n", p->unix_path);
 		}
-		if (NULL == p->stream_type) {
+		if (NULL == p->stream_path) {
 			continue;
 		}
-		p->session = rtsp_new_session(demo, p->stream_type);
+		p->session = rtsp_new_session(demo, p->stream_path);
 		if (NULL == p->session) {
 			printf("rtsp_new_session failed\n");
 			continue;
 		}
 		rtsp_set_video(p->session, RTSP_CODEC_ID_VIDEO_H265, NULL, 0);
 		rtsp_sync_video_ts(p->session, rtsp_get_reltime(), rtsp_get_ntptime());
-		rtsp_set_audio(p->session, RTSP_CODEC_ID_AUDIO_AAC, NULL, 0);
+		rtsp_set_audio(p->session, RTSP_CODEC_ID_AUDIO_G711A, NULL, 0);
 		rtsp_sync_audio_ts(p->session, rtsp_get_reltime(), rtsp_get_ntptime());
 		//rtsp_set_auth(p->session, RTSP_AUTH_TYPE_BASIC, "admin", "123456");
 	}
+	mi_info[2].session = mi_info[0].session;
 
 	signal(SIGINT, sig_proc);
 	signal(SIGPIPE, SIG_IGN);
@@ -190,10 +192,10 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 
-			msg_len = ((unsigned int *)(map_addr + 64))[4];
+			msg_len = ((unsigned int *)(map_addr + 64))[p->msg_offset];
 #if 0
-			printf("type: %s, msglen: 0x%x\n", p->stream_type, msg_len);
-			for (int i = 0; i < 256; i++) {
+			printf("type: %s, msglen: 0x%x\n", p->stream_path, msg_len);
+			for (int i = 0; i < 1024; i++) {
 				printf("%02x ", map_addr[i]);
 			}
 			printf("\n====================\n");
@@ -203,7 +205,15 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 			else {
-				(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
+				if (likely(p->session)) {
+					//(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len == 0x280 ? msg_len/2 : msg_len, ts);
+					if (!p->stream_path) { /* audio only send main */
+						(p->callback)(p->session, (const uint8_t *)(map_addr+96 +320), msg_len/2, ts);
+					}
+					else {
+						(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
+					}
+				}
 			}
 
 			munmap(map_addr, map_len);
