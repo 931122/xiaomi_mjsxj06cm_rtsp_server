@@ -28,6 +28,7 @@ extern "C" {
 #include <signal.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <string.h>
 #include "rtsp_demo.h"
 
 #define likely(x)       __builtin_expect(!!(x), 1)
@@ -71,7 +72,11 @@ int unix_sock_connect(const char *path)
 
 	memset(&unixAddr, 0, sizeof(unixAddr));
 	unixAddr.sun_family = AF_UNIX;
-	strcpy(unixAddr.sun_path, path);
+	if (strlen(path) >= sizeof(unixAddr.sun_path)) {
+		close(unixSock);
+		return -1;
+	}
+	snprintf(unixAddr.sun_path, sizeof(unixAddr.sun_path), "%s", path);
 
 	int ret = connect(unixSock, (struct sockaddr*)&unixAddr, sizeof(unixAddr));
 	if (ret < 0) {
@@ -96,8 +101,8 @@ int main(int argc, char *argv[]) {
 	rtsp_demo_handle demo;
 	struct epoll_event evs[10];
 	struct msghdr msg;
-	struct cmsghdr cm;
 	struct iovec iov[2];
+	char control[CMSG_SPACE(sizeof(int))];
 	char iovPart1[4];
 	char iovPart2[MAX_BUFFER_SIZE];
 	unsigned char audio_send_buf[1024];
@@ -110,6 +115,8 @@ int main(int argc, char *argv[]) {
 	memset(&msg, 0, sizeof(msg));
 	msg.msg_iov = iov;
 	msg.msg_iovlen = 2;
+	msg.msg_control = control;
+	msg.msg_controllen = sizeof(control);
 
 	if (argc > 1) {
 		port = atoi(argv[1]);
@@ -118,11 +125,14 @@ int main(int argc, char *argv[]) {
 	demo = rtsp_new_demo(port);
 	if (NULL == demo) {
 		printf("rtsp_new_demo failed\n");
+		return 1;
 	}
 
 	epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (epoll_fd < 0) {
 		perror("epoll_create1");
+		rtsp_del_demo(demo);
+		return 1;
 	}
 
 	for (ch = 0; ch < 3; ch++) {
@@ -137,9 +147,9 @@ reconnect:
 			sleep(5);
 			goto reconnect;
 		}
+		memset(control, 0, sizeof(control));
+		msg.msg_controllen = sizeof(control);
 		recvmsg(p->fd, &msg, MSG_DONTWAIT); /* need recv one package */
-		msg.msg_control = &cm;
-		msg.msg_controllen = CMSG_LEN(sizeof(int));
 		p->ev.events = EPOLLIN;
 		p->ev.data.ptr = p;
 		ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, p->fd, &p->ev);
@@ -171,15 +181,35 @@ reconnect:
 	while (flag_run) {
 		count = epoll_wait(epoll_fd, evs, 10, EPOLL_TIMEOUT);
 		for (int i = 0; i < count; i++) {
-			struct mi_stream_info* p = evs[i].data.ptr;
-			ssize_t len = recvmsg(p->fd, &msg, MSG_DONTWAIT);
+			struct mi_stream_info* stream = evs[i].data.ptr;
+			memset(control, 0, sizeof(control));
+			msg.msg_controllen = sizeof(control);
+			ssize_t len = recvmsg(stream->fd, &msg, MSG_DONTWAIT);
 			if (len < 0) {
-				printf("recv err:%d\n", len);
+				printf("recv err:%zd\n", len);
+				continue;
+			}
+			if (len < 8) {
+				printf("recv short message:%zd\n", len);
 				continue;
 			}
 
 			map_len = *((int*)(&iovPart2[4]));
-			map_fd  = *(int*)CMSG_DATA(&cm);
+			if (map_len <= 96) {
+				printf("map_len error:%d\n", map_len);
+				continue;
+			}
+			if (!(msg.msg_flags & MSG_CTRUNC) && msg.msg_controllen >= CMSG_LEN(sizeof(int))) {
+				struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+				if (cm && cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS &&
+				    cm->cmsg_len >= CMSG_LEN(sizeof(int))) {
+					map_fd = *(int*)CMSG_DATA(cm);
+				} else {
+					map_fd = -1;
+				}
+			} else {
+				map_fd = -1;
+			}
 			if (unlikely(map_fd <= 0)) {
 				printf("map_fd error:%d\n", map_fd);
 				continue;
@@ -199,8 +229,14 @@ reconnect:
 			}
 			printf("\n====================\n");
 #endif
-			msg_len = ((unsigned int *)(map_addr + 64))[p->msg_offset];
-			if (!p->stream_path) {
+			msg_len = ((unsigned int *)(map_addr + 64))[stream->msg_offset];
+			if (msg_len > (unsigned int)(map_len - 96)) {
+				printf("payload too large: %u > %d\n", msg_len, map_len - 96);
+				munmap(map_addr, map_len);
+				close(map_fd);
+				continue;
+			}
+			if (!stream->stream_path) {
 				/* 16k A-Law -> 8k A-Law */
 				uint8_t *src_data = (uint8_t *)(map_addr + 96);
 				int send_len = 0;
@@ -210,10 +246,10 @@ reconnect:
 					audio_send_buf[send_len++] = src_data[j];
 				}
 
-				(p->callback)(p->session, audio_send_buf, send_len, ts);
+				(stream->callback)(stream->session, audio_send_buf, send_len, ts);
 			}
 			else {
-				(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
+				(stream->callback)(stream->session, (const uint8_t *)(map_addr+96), (int)msg_len, ts);
 			}
 
 			munmap(map_addr, map_len);

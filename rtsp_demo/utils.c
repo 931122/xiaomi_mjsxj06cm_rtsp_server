@@ -333,37 +333,58 @@ int rtsp_codec_data_parse_from_frame_aac (const uint8_t *frame, int len, struct 
 int rtsp_build_sdp_media_attr_h264 (int pt, int sample_rate, const struct codec_data_h264 *pst_codec_data, char *sdpbuf, int maxlen)
 {
 	char *p = sdpbuf;
+#define SDP_WRITE(...) \
+	do { \
+		int __len = snprintf(p, maxlen - (int)(p - sdpbuf), __VA_ARGS__); \
+		if (__len < 0) \
+			return -1; \
+		if (__len >= maxlen - (int)(p - sdpbuf)) \
+			return -1; \
+		p += __len; \
+	} while (0)
 //	dbg("\n");
 
-	p += sprintf(p, "m=video 0 RTP/AVP %d\r\n", pt);
-	p += sprintf(p, "a=rtpmap:%d H264/%d\r\n", pt, sample_rate);
+	SDP_WRITE("m=video 0 RTP/AVP %d\r\n", pt);
+	SDP_WRITE("a=rtpmap:%d H264/%d\r\n", pt, sample_rate);
 	if (pst_codec_data->sps_len > 0 && pst_codec_data->pps_len > 0) {
 		const uint8_t *sps = pst_codec_data->sps;
 		const uint8_t *pps = pst_codec_data->pps;
 		int sps_len = pst_codec_data->sps_len;
 		int pps_len = pst_codec_data->pps_len;
 		unsigned profileLevelId = (sps[1]<<16) | (sps[2]<<8) | sps[3];
-		p += sprintf(p, "a=fmtp:%d packetization-mode=1;profile-level-id=%06X;sprop-parameter-sets=", pt, profileLevelId);
-		base64_encode(p, (maxlen - (p - sdpbuf)), sps, sps_len);
+		SDP_WRITE("a=fmtp:%d packetization-mode=1;profile-level-id=%06X;sprop-parameter-sets=", pt, profileLevelId);
+		if (!base64_encode(p, (maxlen - (int)(p - sdpbuf)), sps, sps_len))
+			return -1;
 		p += strlen(p);
-		p += sprintf(p, ",");
-		base64_encode(p, (maxlen - (p - sdpbuf)), pps, pps_len);
+		SDP_WRITE(",");
+		if (!base64_encode(p, (maxlen - (int)(p - sdpbuf)), pps, pps_len))
+			return -1;
 		p += strlen(p);
-		p += sprintf(p, "\r\n");
+		SDP_WRITE("\r\n");
 	} else {
-		p += sprintf(p, "a=fmtp:%d packetization-mode=1\r\n", pt);
+		SDP_WRITE("a=fmtp:%d packetization-mode=1\r\n", pt);
 	}
 
+#undef SDP_WRITE
 	return (p - sdpbuf);
 }
 
 int rtsp_build_sdp_media_attr_h265 (int pt, int sample_rate, const struct codec_data_h265 *pst_codec_data, char *sdpbuf, int maxlen)
 {
 	char *p = sdpbuf;
+#define SDP_WRITE(...) \
+	do { \
+		int __len = snprintf(p, maxlen - (int)(p - sdpbuf), __VA_ARGS__); \
+		if (__len < 0) \
+			return -1; \
+		if (__len >= maxlen - (int)(p - sdpbuf)) \
+			return -1; \
+		p += __len; \
+	} while (0)
 //	dbg("\n");
 
-	p += sprintf(p, "m=video 0 RTP/AVP %d\r\n", pt);
-	p += sprintf(p, "a=rtpmap:%d H265/%d\r\n", pt, sample_rate);
+	SDP_WRITE("m=video 0 RTP/AVP %d\r\n", pt);
+	SDP_WRITE("a=rtpmap:%d H265/%d\r\n", pt, sample_rate);
 	if (pst_codec_data->vps_len > 0 && pst_codec_data->sps_len > 0 && pst_codec_data->pps_len > 0) {
 		const uint8_t *vps = pst_codec_data->vps;
 		const uint8_t *sps = pst_codec_data->sps;
@@ -372,19 +393,23 @@ int rtsp_build_sdp_media_attr_h265 (int pt, int sample_rate, const struct codec_
 		int sps_len = pst_codec_data->sps_len;
 		int pps_len = pst_codec_data->pps_len;
 
-		p += sprintf(p, "a=fmtp:%d", pt);
-		p += sprintf(p, " sprop-vps=");
-		base64_encode(p, (maxlen - (p - sdpbuf)), vps, vps_len);
+		SDP_WRITE("a=fmtp:%d", pt);
+		SDP_WRITE(" sprop-vps=");
+		if (!base64_encode(p, (maxlen - (int)(p - sdpbuf)), vps, vps_len))
+			return -1;
 		p += strlen(p);
-		p += sprintf(p, ";sprop-sps=");
-		base64_encode(p, (maxlen - (p - sdpbuf)), sps, sps_len);
+		SDP_WRITE(";sprop-sps=");
+		if (!base64_encode(p, (maxlen - (int)(p - sdpbuf)), sps, sps_len))
+			return -1;
 		p += strlen(p);
-		p += sprintf(p, ";sprop-pps=");
-		base64_encode(p, (maxlen - (p - sdpbuf)), pps, pps_len);
+		SDP_WRITE(";sprop-pps=");
+		if (!base64_encode(p, (maxlen - (int)(p - sdpbuf)), pps, pps_len))
+			return -1;
 		p += strlen(p);
-		p += sprintf(p, "\r\n");
+		SDP_WRITE("\r\n");
 	}
 
+#undef SDP_WRITE
 	return (p - sdpbuf);
 }
 
@@ -393,10 +418,10 @@ int rtsp_build_sdp_media_attr_g711a (int pt, int sample_rate, char *sdpbuf, int 
 	char *p = sdpbuf;
 //	dbg("\n");
 
-	p += sprintf(p, "m=audio 0 RTP/AVP %d\r\n", pt);
-	p += sprintf(p, "a=rtpmap:%d PCMA/%d/1\r\n", pt, sample_rate);
+	if (snprintf(p, maxlen, "m=audio 0 RTP/AVP %d\r\na=rtpmap:%d PCMA/%d/1\r\n", pt, pt, sample_rate) >= maxlen)
+		return -1;
 
-	return (p - sdpbuf);
+	return strlen(sdpbuf);
 }
 
 int rtsp_build_sdp_media_attr_g711u (int pt, int sample_rate, char *sdpbuf, int maxlen)
@@ -404,10 +429,10 @@ int rtsp_build_sdp_media_attr_g711u (int pt, int sample_rate, char *sdpbuf, int 
 	char *p = sdpbuf;
 //	dbg("\n");
 
-	p += sprintf(p, "m=audio 0 RTP/AVP %d\r\n", pt);
-	p += sprintf(p, "a=rtpmap:%d PCMU/%d/1\r\n", pt, sample_rate);
+	if (snprintf(p, maxlen, "m=audio 0 RTP/AVP %d\r\na=rtpmap:%d PCMU/%d/1\r\n", pt, pt, sample_rate) >= maxlen)
+		return -1;
 
-	return (p - sdpbuf);
+	return strlen(sdpbuf);
 }
 
 int rtsp_build_sdp_media_attr_g726 (int pt, int sample_rate, const struct codec_data_g726 *pst_codec_data, char *sdpbuf, int maxlen)
@@ -415,12 +440,11 @@ int rtsp_build_sdp_media_attr_g726 (int pt, int sample_rate, const struct codec_
 	char *p = sdpbuf;
 //	dbg("\n");
 
-	p += sprintf(p, "m=audio 0 RTP/AVP %d\r\n", pt);
-	p += sprintf(p, "a=rtpmap:%d G726-%d/%d/1\r\n", pt, 
-		pst_codec_data->bit_rate ? pst_codec_data->bit_rate / 1000 : 32, 
-		sample_rate);
+	if (snprintf(p, maxlen, "m=audio 0 RTP/AVP %d\r\na=rtpmap:%d G726-%d/%d/1\r\n",
+		pt, pt, pst_codec_data->bit_rate ? pst_codec_data->bit_rate / 1000 : 32, sample_rate) >= maxlen)
+		return -1;
 
-	return (p - sdpbuf);
+	return strlen(sdpbuf);
 }
 
 int rtsp_build_sdp_media_attr_aac (int pt, int sample_rate, const struct codec_data_aac *pst_codec_data, char *sdpbuf, int maxlen)
@@ -428,16 +452,21 @@ int rtsp_build_sdp_media_attr_aac (int pt, int sample_rate, const struct codec_d
 	char *p = sdpbuf;
 //	dbg("\n");
 
-	p += sprintf(p, "m=audio 0 RTP/AVP %d\r\n", pt);
-	p += sprintf(p, "a=rtpmap:%d MPEG4-GENERIC/%d/%d\r\n", pt, 
-		pst_codec_data->sample_rate ? pst_codec_data->sample_rate : 44100, 
-		pst_codec_data->channels ? pst_codec_data->channels : 2);
+	if (snprintf(p, maxlen, "m=audio 0 RTP/AVP %d\r\na=rtpmap:%d MPEG4-GENERIC/%d/%d\r\n",
+		pt, pt, pst_codec_data->sample_rate ? pst_codec_data->sample_rate : 44100,
+		pst_codec_data->channels ? pst_codec_data->channels : 2) >= maxlen)
+		return -1;
+	p += strlen(p);
 
 	if (pst_codec_data->audio_specific_config_len == 2) {
-		p += sprintf(p, "a=fmtp:%d profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=%02X%02X\r\n", 
-			pt, pst_codec_data->audio_specific_config[0], pst_codec_data->audio_specific_config[1]);
+		if (snprintf(p, maxlen - (int)(p - sdpbuf),
+			"a=fmtp:%d profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=%02X%02X\r\n",
+			pt, pst_codec_data->audio_specific_config[0], pst_codec_data->audio_specific_config[1]) >= maxlen - (int)(p - sdpbuf))
+			return -1;
 	} else {
-		p += sprintf(p, "a=fmtp:%d profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3\r\n", pt);
+		if (snprintf(p, maxlen - (int)(p - sdpbuf),
+			"a=fmtp:%d profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3\r\n", pt) >= maxlen - (int)(p - sdpbuf))
+			return -1;
 	}
-	return (p - sdpbuf);
+	return strlen(sdpbuf);
 }

@@ -258,6 +258,10 @@ static struct tsession *make_new_session(int sockfd)
 	int pty, pid;
 	char tty_name[32];
 	struct tsession *ts = malloc(sizeof(struct tsession) + BUFSIZE * 2);
+	if (!ts) {
+		syslog(LOG_ERR, "Out of memory");
+		return 0;
+	}
 
 	ts->buf1 = (char *)(&ts[1]);
 	ts->buf2 = ts->buf1 + BUFSIZE;
@@ -295,6 +299,9 @@ static struct tsession *make_new_session(int sockfd)
 
 	if ((pid = fork()) < 0) {
 		syslog(LOG_ERR, "Can`t forking");
+		close(ts->ptyfd);
+		free(ts);
+		return 0;
 	}
 	if (pid == 0) {
 		/* In child, open the child's side of the tty.  */
@@ -352,9 +359,10 @@ static void free_session(struct tsession *ts)
 		t->next = ts->next;
 	}
 
-	kill(ts->shell_pid, SIGKILL);
-
-	wait4(ts->shell_pid, NULL, 0, NULL);
+	if (ts->shell_pid > 0) {
+		kill(ts->shell_pid, SIGKILL);
+		wait4(ts->shell_pid, NULL, 0, NULL);
+	}
 
 	close(ts->ptyfd);
 	close(ts->sockfd);

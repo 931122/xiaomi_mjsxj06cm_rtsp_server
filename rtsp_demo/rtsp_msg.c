@@ -18,7 +18,7 @@
 void *rtsp_mem_alloc (int size)
 {
 	if (size > 0)
-		return calloc(1, size);
+		return calloc(1, (size_t)size);
 	return NULL;
 }
 
@@ -30,16 +30,23 @@ void rtsp_mem_free (void *ptr)
 
 void *rtsp_mem_dup (const void *ptr, int size)
 {
-	void *ptr1 = calloc(1, size);
+	void *ptr1;
+	if (size <= 0)
+		return NULL;
+	ptr1 = calloc(1, (size_t)size);
 	if (ptr1 && ptr)
-		memcpy(ptr1, ptr, size);
+		memcpy(ptr1, ptr, (size_t)size);
 	return ptr1;
 }
 
 char *rtsp_str_dup (const char *str)
 {
-	int len = strlen(str);
-	char *str1 = (char*) calloc(1, len + 1);
+	size_t len;
+	char *str1;
+	if (!str)
+		return NULL;
+	len = strlen(str);
+	str1 = (char*) calloc(1, len + 1);
 	if (str1 && str)
 		memcpy(str1, str, len);
 	return str1;
@@ -213,17 +220,24 @@ static int rtsp_msg_parse_uri (const char *line, rtsp_msg_uri_s *uri)
 
 static int rtsp_msg_build_uri (const rtsp_msg_uri_s *uri, char *line, int size)
 {
+	int written;
+
+	if (!uri || !line || size <= 0)
+		return -1;
+
 	if (uri->port)
-		snprintf(line, size, "%s//%s:%u%s", 
-				rtsp_msg_int2str(rtsp_msg_uri_scheme_tbl,
-					ARRAY_SIZE(rtsp_msg_uri_scheme_tbl), uri->scheme),
-				uri->ipaddr, uri->port, uri->abspath);
+		written = snprintf(line, (size_t)size, "%s//%s:%u%s",
+					rtsp_msg_int2str(rtsp_msg_uri_scheme_tbl,
+						ARRAY_SIZE(rtsp_msg_uri_scheme_tbl), uri->scheme),
+					uri->ipaddr, uri->port, uri->abspath);
 	else
-		snprintf(line, size, "%s//%s%s", 
-				rtsp_msg_int2str(rtsp_msg_uri_scheme_tbl,
-					ARRAY_SIZE(rtsp_msg_uri_scheme_tbl), uri->scheme),
-				uri->ipaddr, uri->abspath);
-	return strlen(line);
+		written = snprintf(line, (size_t)size, "%s//%s%s",
+					rtsp_msg_int2str(rtsp_msg_uri_scheme_tbl,
+						ARRAY_SIZE(rtsp_msg_uri_scheme_tbl), uri->scheme),
+					uri->ipaddr, uri->abspath);
+	if (written < 0 || written >= size)
+		return -1;
+	return written;
 }
 
 //return 0. if success
@@ -236,17 +250,29 @@ static int rtsp_msg_parse_startline (rtsp_msg_s *msg, const char *line)
 	if (ret != RTSP_MSG_METHOD_BUTT) {
 		msg->type = RTSP_MSG_TYPE_REQUEST;
 		msg->hdrs.startline.reqline.method = (rtsp_msg_method_e) ret;
-		while (isgraph(*p)) p++; p++; //next field
+		while (isgraph((unsigned char)*p))
+			p++;
+		if (*p != ' ') {
+			err("parse request uri failed. line: %s\n", line);
+			return -1;
+		}
+		p++;
 		ret = rtsp_msg_parse_uri(p,	&msg->hdrs.startline.reqline.uri);
 		if (ret <= 0)
 			return -1;
-		while (isgraph(*p)) p++; p++; //next field
+		p += ret;
+		if (*p != ' ') {
+			err("parse request version failed. line: %s\n", line);
+			return -1;
+		}
+		p++;
 		ret = rtsp_msg_str2int(rtsp_msg_version_tbl,
 				ARRAY_SIZE(rtsp_msg_version_tbl), p);
 		if (ret == RTSP_MSG_VERSION_BUTT) {
 			err("parse version failed. line: %s\n", line);
 			return -1;
 		}
+		msg->hdrs.startline.reqline.version = (rtsp_msg_version_e) ret;
 		return 0;
 	}
 
@@ -255,7 +281,13 @@ static int rtsp_msg_parse_startline (rtsp_msg_s *msg, const char *line)
 	if (ret != RTSP_MSG_VERSION_BUTT) {
 		msg->type = RTSP_MSG_TYPE_RESPONSE;
 		msg->hdrs.startline.resline.version = (rtsp_msg_version_e) ret;
-		while (isgraph(*p)) p++; p++; //next field
+		while (isgraph((unsigned char)*p))
+			p++;
+		if (*p != ' ') {
+			err("parse status-code failed. line: %s\n", line);
+			return -1;
+		}
+		p++;
 		if (sscanf(p, "%d", &ret) != 1) {
 			err("parse status-code failed. line: %s\n", line);
 			return -1;
@@ -874,6 +906,9 @@ int rtsp_msg_frame_size (const void *data, int size)
 	const char *p;
 	int hdrlen = 0, content_len = 0;
 
+	if (!frame || size <= 0)
+		return 0;
+
 	//check first
 	p = strstr(frame, "\r\n");
 	if (!p || size < p - frame + 2) {
@@ -919,13 +954,19 @@ int rtsp_msg_parse_from_array (rtsp_msg_s *msg, const void *data, int size)
 	char line[256];
 	int ret;
 
+	if (!msg || !data || size <= 0)
+		return -1;
+
 	memset(msg, 0, sizeof(rtsp_msg_s));
 
 	//interleaved frame
 	if (frame[0] == '$') {
-		uint16_t interlen = *((uint16_t*)(p+2));
+		uint16_t interlen;
+		if (size < 4)
+			return 0;
+		interlen = *((uint16_t*)(p+2));
 		interlen = ntohs(interlen); 
-		if (size < interlen + 4)
+		if (size < (int)interlen + 4)
 			return 0;
 		msg->type = RTSP_MSG_TYPE_INTERLEAVED;
 		msg->hdrs.startline.interline.channel = *((uint8_t*)(p+1));
@@ -1428,5 +1469,3 @@ int main(int argc, char *argv[])
 	return 0;
 }
 #endif
-
-

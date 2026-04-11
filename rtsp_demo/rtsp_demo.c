@@ -455,13 +455,22 @@ static int rtsp_path_match (const char *main_path, const char *full_path)
 {
 	char path0[64] = {0};
 	char path1[64] = {0};
+	size_t len0, len1;
+
+	if (!main_path || !full_path || main_path[0] == '\0' || full_path[0] == '\0')
+		return 0;
 
 	strncpy(path0, main_path, sizeof(path0) - 2);
 	strncpy(path1, full_path, sizeof(path1) - 2);
 
-	if (path0[strlen(path0) - 1] != '/')
+	len0 = strlen(path0);
+	len1 = strlen(path1);
+	if (len0 == 0 || len1 == 0)
+		return 0;
+
+	if (path0[len0 - 1] != '/')
 		strcat(path0, "/");
-	if (path1[strlen(path1) - 1] != '/')
+	if (path1[len1 - 1] != '/')
 		strcat(path1, "/");
 
 	if (strncmp(path0, path1, strlen(path0)))
@@ -499,7 +508,7 @@ rtsp_session_handle rtsp_new_session (rtsp_demo_handle demo, const char *path)
 	return (rtsp_session_handle)s;
 fail:
 	if (s) {
-		free(s);
+		__free_session(s);
 	}
 	return NULL;
 }
@@ -688,57 +697,81 @@ void rtsp_del_demo (rtsp_demo_handle demo)
 static int build_simple_sdp (struct rtsp_session *s, const char *ip, const char *uri, char *sdpbuf, int maxlen)
 {
 	char *p = sdpbuf;
+#define SDP_APPEND(...) \
+	do { \
+		int __len = snprintf(p, maxlen - (int)(p - sdpbuf), __VA_ARGS__); \
+		if (__len < 0) \
+			return -1; \
+		if (__len >= maxlen - (int)(p - sdpbuf)) \
+			return -1; \
+		p += __len; \
+	} while (0)
 
-	p += sprintf(p, "v=0\r\n");
-	p += sprintf(p, "o=- 0 0 IN IP4 %s\r\n", ip ? ip : "0.0.0.0");
-	p += sprintf(p, "s=rtsp_demo\r\n");
-	p += sprintf(p, "t=0 0\r\n");
-	p += sprintf(p, "c=IN IP4 %s\r\n", ip ? ip : "0.0.0.0");
-	p += sprintf(p, "a=control:%s\r\n", uri ? uri : "*");
-	p += sprintf(p, "a=range:npt=0-\r\n");
+	SDP_APPEND("v=0\r\n");
+	SDP_APPEND("o=- 0 0 IN IP4 %s\r\n", ip ? ip : "0.0.0.0");
+	SDP_APPEND("s=rtsp_demo\r\n");
+	SDP_APPEND("t=0 0\r\n");
+	SDP_APPEND("c=IN IP4 %s\r\n", ip ? ip : "0.0.0.0");
+	SDP_APPEND("a=control:%s\r\n", uri ? uri : "*");
+	SDP_APPEND("a=range:npt=0-\r\n");
 
 	if (s->vcodec_id != RTSP_CODEC_ID_NONE) {
+		int media_len;
 		switch (s->vcodec_id) {
 		case RTSP_CODEC_ID_VIDEO_H264:
-			p += rtsp_build_sdp_media_attr_h264(VRTP_PT_ID, s->vrtpe.sample_rate, 
-					&s->vcodec_data.h264, p, maxlen - (p - sdpbuf));
+			media_len = rtsp_build_sdp_media_attr_h264(VRTP_PT_ID, s->vrtpe.sample_rate,
+					&s->vcodec_data.h264, p, maxlen - (int)(p - sdpbuf));
 			break;
 		case RTSP_CODEC_ID_VIDEO_H265:
-			p += rtsp_build_sdp_media_attr_h265(VRTP_PT_ID, s->vrtpe.sample_rate, 
-					&s->vcodec_data.h265, p, maxlen - (p - sdpbuf));
+			media_len = rtsp_build_sdp_media_attr_h265(VRTP_PT_ID, s->vrtpe.sample_rate,
+					&s->vcodec_data.h265, p, maxlen - (int)(p - sdpbuf));
+			break;
+		default:
+			media_len = -1;
 			break;
 		}
+		if (media_len < 0)
+			return -1;
+		p += media_len;
 		if (uri)
-			p += sprintf(p, "a=control:%s/%s\r\n", uri, VRTSP_SUBPATH);
+			SDP_APPEND("a=control:%s/%s\r\n", uri, VRTSP_SUBPATH);
 		else
-			p += sprintf(p, "a=control:%s\r\n", VRTSP_SUBPATH);
+			SDP_APPEND("a=control:%s\r\n", VRTSP_SUBPATH);
 	}
 
 	if (s->acodec_id != RTSP_CODEC_ID_NONE) {
+		int media_len;
 		switch (s->acodec_id) {
 		case RTSP_CODEC_ID_AUDIO_G711A:
-			p += rtsp_build_sdp_media_attr_g711a(ARTP_PT_ID, s->artpe.sample_rate, 
-					p, maxlen - (p - sdpbuf));
+			media_len = rtsp_build_sdp_media_attr_g711a(ARTP_PT_ID, s->artpe.sample_rate,
+					p, maxlen - (int)(p - sdpbuf));
 			break;
 		case RTSP_CODEC_ID_AUDIO_G711U:
-			p += rtsp_build_sdp_media_attr_g711u(ARTP_PT_ID, s->artpe.sample_rate, 
-					p, maxlen - (p - sdpbuf));
+			media_len = rtsp_build_sdp_media_attr_g711u(ARTP_PT_ID, s->artpe.sample_rate,
+					p, maxlen - (int)(p - sdpbuf));
 			break;
 		case RTSP_CODEC_ID_AUDIO_G726:
-			p += rtsp_build_sdp_media_attr_g726(ARTP_PT_ID, s->artpe.sample_rate, 
-					&s->acodec_data.g726, p, maxlen - (p - sdpbuf));
+			media_len = rtsp_build_sdp_media_attr_g726(ARTP_PT_ID, s->artpe.sample_rate,
+					&s->acodec_data.g726, p, maxlen - (int)(p - sdpbuf));
 			break;
 		case RTSP_CODEC_ID_AUDIO_AAC:
-			p += rtsp_build_sdp_media_attr_aac(ARTP_PT_ID, s->artpe.sample_rate, 
-					&s->acodec_data.aac, p, maxlen - (p - sdpbuf));
+			media_len = rtsp_build_sdp_media_attr_aac(ARTP_PT_ID, s->artpe.sample_rate,
+					&s->acodec_data.aac, p, maxlen - (int)(p - sdpbuf));
+			break;
+		default:
+			media_len = -1;
 			break;
 		}
+		if (media_len < 0)
+			return -1;
+		p += media_len;
 		if (uri)
-			p += sprintf(p, "a=control:%s/%s\r\n", uri, ARTSP_SUBPATH);
+			SDP_APPEND("a=control:%s/%s\r\n", uri, ARTSP_SUBPATH);
 		else
-			p += sprintf(p, "a=control:%s\r\n", ARTSP_SUBPATH);
+			SDP_APPEND("a=control:%s\r\n", ARTSP_SUBPATH);
 	}
 
+#undef SDP_APPEND
 	return (p - sdpbuf);
 }
 
@@ -805,6 +838,7 @@ static int rtsp_handle_DESCRIBE (struct rtsp_client_connection *cc, const rtsp_m
 	uint32_t accept = 0;
 	const rtsp_msg_uri_s *puri = &reqmsg->hdrs.startline.reqline.uri;
 	char uri[128] = "";
+	int written;
 
 	dbg("\n");
 	if (rtsp_msg_get_accept(reqmsg, &accept) < 0 && !(accept & RTSP_MSG_ACCEPT_SDP)) {
@@ -814,12 +848,29 @@ static int rtsp_handle_DESCRIBE (struct rtsp_client_connection *cc, const rtsp_m
 	}
 
 	//build uri
-	sprintf(uri, "rtsp://%s", puri->ipaddr);
-	if (puri->port != 0)
-		sprintf(uri + strlen(uri), ":%u", puri->port);
-	strcat(uri, s->path);
+	written = snprintf(uri, sizeof(uri), "rtsp://%s", puri->ipaddr);
+	if (written < 0 || written >= (int)sizeof(uri)) {
+		rtsp_msg_set_response(resmsg, 500);
+		return 0;
+	}
+	if (puri->port != 0) {
+		written += snprintf(uri + written, sizeof(uri) - written, ":%u", puri->port);
+		if (written < 0 || written >= (int)sizeof(uri)) {
+			rtsp_msg_set_response(resmsg, 500);
+			return 0;
+		}
+	}
+	if (snprintf(uri + written, sizeof(uri) - written, "%s", s->path) >= (int)(sizeof(uri) - written)) {
+		rtsp_msg_set_response(resmsg, 500);
+		return 0;
+	}
 	
 	sdplen = build_simple_sdp(s, puri->ipaddr, uri, sdpbuf, sizeof(sdpbuf));
+	if (sdplen < 0) {
+		rtsp_msg_set_response(resmsg, 500);
+		warn("build sdp failed\n");
+		return 0;
+	}
 
 	rtsp_msg_set_content_type(resmsg, RTSP_MSG_CONTENT_TYPE_SDP);
 	rtsp_msg_set_content_length(resmsg, sdplen);
@@ -1004,8 +1055,8 @@ static int rtsp_handle_SETUP (struct rtsp_client_connection *cc, const rtsp_msg_
 	struct rtsp_session *s = cc->session;
 	struct rtp_connection *rtp = NULL;
 	int istcp = 0, isaudio = 0;
-	char vpath[64] = "";
-	char apath[64] = "";
+	char vpath[128] = "";
+	char apath[128] = "";
 	uint32_t x_dynamic_rate;
 	int ret;
 
@@ -1032,8 +1083,11 @@ static int rtsp_handle_SETUP (struct rtsp_client_connection *cc, const rtsp_msg_
 		}
 	}
 
-	snprintf(vpath, sizeof(vpath) - 1, "%s/%s", s->path, VRTSP_SUBPATH);
-	snprintf(apath, sizeof(vpath) - 1, "%s/%s", s->path, ARTSP_SUBPATH);
+	if (snprintf(vpath, sizeof(vpath), "%s/%s", s->path, VRTSP_SUBPATH) >= (int)sizeof(vpath) ||
+	    snprintf(apath, sizeof(apath), "%s/%s", s->path, ARTSP_SUBPATH) >= (int)sizeof(apath)) {
+		rtsp_msg_set_response(resmsg, 500);
+		return 0;
+	}
 	if (s->vcodec_id != RTSP_CODEC_ID_NONE && rtsp_path_match(vpath, reqmsg->hdrs.startline.reqline.uri.abspath)) {
 		isaudio = 0;
 	} else if (s->acodec_id != RTSP_CODEC_ID_NONE && rtsp_path_match(apath, reqmsg->hdrs.startline.reqline.uri.abspath)) {
@@ -1124,12 +1178,15 @@ static int rtsp_handle_TEARDOWN (struct rtsp_client_connection *cc, const rtsp_m
 {
 //	struct rtsp_demo *d = cc->demo;
 	struct rtsp_session *s = cc->session;
-	char vpath[64] = "";
-	char apath[64] = "";
+	char vpath[128] = "";
+	char apath[128] = "";
 	dbg("\n");
 
-	snprintf(vpath, sizeof(vpath) - 1, "%s/%s", s->path, VRTSP_SUBPATH);
-	snprintf(apath, sizeof(vpath) - 1, "%s/%s", s->path, ARTSP_SUBPATH);
+	if (snprintf(vpath, sizeof(vpath), "%s/%s", s->path, VRTSP_SUBPATH) >= (int)sizeof(vpath) ||
+	    snprintf(apath, sizeof(apath), "%s/%s", s->path, ARTSP_SUBPATH) >= (int)sizeof(apath)) {
+		rtsp_msg_set_response(resmsg, 500);
+		return 0;
+	}
 
 	if (rtsp_path_match(vpath, reqmsg->hdrs.startline.reqline.uri.abspath)) {
 		rtsp_del_rtp_connection(cc, 0);
@@ -2094,4 +2151,3 @@ int rtsp_sync_audio_ts (rtsp_session_handle session, uint64_t ts, uint64_t ntpti
 	s->audio_ntptime_of_zero_ts = ntptime - ts; //XXX
 	return 0;
 }
-

@@ -28,9 +28,31 @@
 
 	`/mnt/sdcard/hacks/run.sh &`
 
-`# cat /mnt/sdcard/hacks/run.sh
+	`# cat /mnt/sdcard/hacks/run.sh
 #!/bin/sh
 CONFIG_PATH=/mnt/sdcard/hacks/etc
 BIN_PATH=/mnt/sdcard/hacks/bin
 
 sleep 90 && $BIN_PATH/demo`
+
+3. 本地控制云台
+
+	仓库内提供了一个基于 `libmortox` 的本地测试程序 `mortox_lib_demo.c`，不依赖 `miio token`。
+
+	编译：
+
+	`/opt/toolchain/arm-sigmastar-linux-uclibcgnueabihf-9.1.0/bin/arm-sigmastar-linux-uclibcgnueabihf-9.1.0-gcc -Wall -Wextra -O2 mortox_lib_demo.c -ldl -o mortox_lib_demo`
+
+	使用：
+
+	`./mortox_lib_demo left`
+
+	`./mortox_lib_demo right`
+
+	`./mortox_lib_demo up`
+
+	`./mortox_lib_demo down`
+
+	默认从当前目录加载 `./libmortox.so.0.0.0`，默认连接 `/tmp/mortox.socket`，也可以手动指定：
+
+	`./mortox_lib_demo left ./libmortox.so.0.0.0 /tmp/mortox.socket`

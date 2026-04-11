@@ -1,0 +1,4 @@
+*.o
+rtsp_demo/mi_rtsp_server
+telnetd
+.codex
