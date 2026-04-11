@@ -45,7 +45,6 @@ struct mi_stream_info {
 	const int msg_offset;
 	bool enabled;
 	int fd;
-	int ch;
 	struct epoll_event ev;
 	rtsp_session_handle session;
 } mi_info[3] = {
@@ -101,6 +100,7 @@ int main(int argc, char *argv[]) {
 	struct iovec iov[2];
 	char iovPart1[4];
 	char iovPart2[MAX_BUFFER_SIZE];
+	unsigned char audio_send_buf[1024];
 
 	iov[0].iov_base = iovPart1;
 	iov[0].iov_len = sizeof(iovPart1);
@@ -130,10 +130,12 @@ int main(int argc, char *argv[]) {
 		if (!p->enabled) {
 			continue;
 		}
-		p->ch = ch;
+reconnect:
 		p->fd = unix_sock_connect(p->unix_path);
 		if (p->fd < 0) {
 			printf("connect %s error\n", p->unix_path);
+			sleep(5);
+			goto reconnect;
 		}
 		recvmsg(p->fd, &msg, MSG_DONTWAIT); /* need recv one package */
 		msg.msg_control = &cm;
@@ -198,8 +200,17 @@ int main(int argc, char *argv[]) {
 			printf("\n====================\n");
 #endif
 			msg_len = ((unsigned int *)(map_addr + 64))[p->msg_offset];
-			if (!p->stream_path) { /* audio only send main */
-				(p->callback)(p->session, (const uint8_t *)(map_addr+96 +320), msg_len/2, ts);
+			if (!p->stream_path) {
+				/* 16k A-Law -> 8k A-Law */
+				uint8_t *src_data = (uint8_t *)(map_addr + 96);
+				int send_len = 0;
+
+				// downsample
+				for (int j = 0; j < msg_len && send_len < 1024; j += 2) {
+					audio_send_buf[send_len++] = src_data[j];
+				}
+
+				(p->callback)(p->session, audio_send_buf, send_len, ts);
 			}
 			else {
 				(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
