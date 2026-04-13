@@ -1,6 +1,6 @@
 
 
-OBJS = mi_rtsp_server.o rtsp_demo.o rtsp_msg.o rtp_enc.o stream_queue.o utils.o
+OBJS = mi_rtsp_server.o rtsp_demo.o rtsp_msg.o rtp_enc.o stream_queue.o utils.o mi_unix.o mi_audio_codec.o mi_audio_play.o
 TAR = mi_rtsp_server
 
 CC = /opt/toolchain/arm-sigmastar-linux-uclibcgnueabihf-9.1.0/bin/arm-sigmastar-linux-uclibcgnueabihf-9.1.0-gcc

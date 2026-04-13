@@ -21,7 +21,6 @@ extern "C" {
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/un.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <arpa/inet.h>
@@ -30,12 +29,16 @@ extern "C" {
 #include <stdbool.h>
 #include <string.h>
 #include "rtsp_demo.h"
+#include "mi_unix.h"
+#include "mi_audio_codec.h"
+#include "mi_audio_play.h"
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
 
 #define MAX_BUFFER_SIZE 128
 #define EPOLL_TIMEOUT 60000 // milliseconds
+#define AUDIO_PLAY_PATH "/run/audio_play/control"
 
 typedef int(*set_frame)(rtsp_session_handle session, const uint8_t *frame, int len, uint64_t ts);
 
@@ -55,37 +58,10 @@ struct mi_stream_info {
 };
 
 static int flag_run = 1;
+
 static void sig_proc(int signo)
 {
 	flag_run = 0;
-}
-
-int unix_sock_connect(const char *path)
-{
-	struct sockaddr_un unixAddr;
-
-	int unixSock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-	if (unixSock < 0) {
-		perror("socket\n");
-		return unixSock;
-	}
-
-	memset(&unixAddr, 0, sizeof(unixAddr));
-	unixAddr.sun_family = AF_UNIX;
-	if (strlen(path) >= sizeof(unixAddr.sun_path)) {
-		close(unixSock);
-		return -1;
-	}
-	snprintf(unixAddr.sun_path, sizeof(unixAddr.sun_path), "%s", path);
-
-	int ret = connect(unixSock, (struct sockaddr*)&unixAddr, sizeof(unixAddr));
-	if (ret < 0) {
-		perror("connect\n");
-		close(unixSock);
-		return -1;
-	}
-
-	return unixSock;
 }
 
 int main(int argc, char *argv[]) {
@@ -106,6 +82,7 @@ int main(int argc, char *argv[]) {
 	char iovPart1[4];
 	char iovPart2[MAX_BUFFER_SIZE];
 	unsigned char audio_send_buf[1024];
+	struct mi_audio_play_bridge talkback;
 
 	iov[0].iov_base = iovPart1;
 	iov[0].iov_len = sizeof(iovPart1);
@@ -141,7 +118,7 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 reconnect:
-		p->fd = unix_sock_connect(p->unix_path);
+		p->fd = mi_unix_sock_connect_seqpacket(p->unix_path, 1);
 		if (p->fd < 0) {
 			printf("connect %s error\n", p->unix_path);
 			sleep(5);
@@ -167,6 +144,7 @@ reconnect:
 		rtsp_set_video(p->session, RTSP_CODEC_ID_VIDEO_H265, NULL, 0);
 		rtsp_sync_video_ts(p->session, rtsp_get_reltime(), rtsp_get_ntptime());
 		rtsp_set_audio(p->session, RTSP_CODEC_ID_AUDIO_G711A, NULL, 0);
+		rtsp_set_audio_rx_hook(p->session, mi_audio_play_rtsp_rx_hook, &talkback);
 		rtsp_sync_audio_ts(p->session, rtsp_get_reltime(), rtsp_get_ntptime());
 		//rtsp_set_auth(p->session, RTSP_AUTH_TYPE_BASIC, "admin", "123456");
 	}
@@ -174,6 +152,7 @@ reconnect:
 
 	signal(SIGINT, sig_proc);
 	signal(SIGPIPE, SIG_IGN);
+	mi_audio_play_bridge_init(&talkback, AUDIO_PLAY_PATH);
 
 	printf("start...\n");
 
@@ -237,16 +216,13 @@ reconnect:
 				continue;
 			}
 			if (!stream->stream_path) {
-				/* 16k A-Law -> 8k A-Law */
-				uint8_t *src_data = (uint8_t *)(map_addr + 96);
-				int send_len = 0;
-
-				// downsample
-				for (int j = 0; j < msg_len && send_len < 1024; j += 2) {
-					audio_send_buf[send_len++] = src_data[j];
+				int send_len = mi_downsample_alaw_16k_to_8k((const uint8_t *)(map_addr + 96),
+									    (int)msg_len,
+									    audio_send_buf,
+									    sizeof(audio_send_buf));
+				if (send_len > 0) {
+					(stream->callback)(stream->session, audio_send_buf, send_len, ts);
 				}
-
-				(stream->callback)(stream->session, audio_send_buf, send_len, ts);
 			}
 			else {
 				(stream->callback)(stream->session, (const uint8_t *)(map_addr+96), (int)msg_len, ts);
@@ -283,6 +259,7 @@ reconnect:
 	}
 
 	close(epoll_fd);
+	mi_audio_play_bridge_close(&talkback);
 	rtsp_del_demo(demo);
 
 	return 0;

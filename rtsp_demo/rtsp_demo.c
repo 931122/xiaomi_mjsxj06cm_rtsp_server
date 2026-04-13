@@ -88,6 +88,8 @@ struct rtsp_session
 	rtp_enc artpe;
 	struct stream_queue *vstreamq;
 	struct stream_queue *astreamq;
+	rtsp_rx_audio_hook audio_rx_hook;
+	void *audio_rx_opaque;
 
 	uint64_t video_ntptime_of_zero_ts;
 	uint64_t audio_ntptime_of_zero_ts;
@@ -478,6 +480,18 @@ static int rtsp_path_match (const char *main_path, const char *full_path)
 	return 1;
 }
 
+static int rtsp_streamid_match (const char *full_path, int streamid)
+{
+	char pattern[32];
+
+	if (!full_path) {
+		return 0;
+	}
+
+	snprintf(pattern, sizeof(pattern), "/streamid=%d", streamid);
+	return strstr(full_path, pattern) != NULL;
+}
+
 rtsp_session_handle rtsp_new_session (rtsp_demo_handle demo, const char *path)
 {
 	struct rtsp_demo *d = (struct rtsp_demo*)demo;
@@ -658,6 +672,19 @@ int rtsp_set_audio (rtsp_session_handle session, int codec_id, const uint8_t *co
 	return 0;
 }
 
+int rtsp_set_audio_rx_hook (rtsp_session_handle session, rtsp_rx_audio_hook hook, void *opaque)
+{
+	struct rtsp_session *s = (struct rtsp_session*) session;
+
+	if (!s) {
+		return -1;
+	}
+
+	s->audio_rx_hook = hook;
+	s->audio_rx_opaque = opaque;
+	return 0;
+}
+
 void rtsp_del_session (rtsp_session_handle session)
 {
 	struct rtsp_session *s = (struct rtsp_session*)session;
@@ -824,7 +851,11 @@ static int rtsp_handle_OPTIONS (struct rtsp_client_connection *cc, const rtsp_ms
 	public_ |= RTSP_MSG_PUBLIC_SETUP;
 	public_ |= RTSP_MSG_PUBLIC_PAUSE;
 	public_ |= RTSP_MSG_PUBLIC_PLAY;
+	public_ |= RTSP_MSG_PUBLIC_RECORD;
 	public_ |= RTSP_MSG_PUBLIC_TEARDOWN;
+	public_ |= RTSP_MSG_PUBLIC_ANNOUNCE;
+	public_ |= RTSP_MSG_PUBLIC_SET_PARAMETER;
+	public_ |= RTSP_MSG_PUBLIC_GET_PARAMETER;
 	rtsp_msg_set_public(resmsg, public_);
 	return 0;
 }
@@ -1092,6 +1123,10 @@ static int rtsp_handle_SETUP (struct rtsp_client_connection *cc, const rtsp_msg_
 		isaudio = 0;
 	} else if (s->acodec_id != RTSP_CODEC_ID_NONE && rtsp_path_match(apath, reqmsg->hdrs.startline.reqline.uri.abspath)) {
 		isaudio = 1;
+	} else if (s->acodec_id != RTSP_CODEC_ID_NONE &&
+		   rtsp_path_match(s->path, reqmsg->hdrs.startline.reqline.uri.abspath) &&
+		   rtsp_streamid_match(reqmsg->hdrs.startline.reqline.uri.abspath, 0)) {
+		isaudio = 1;
 	} else {
 		warn("rtsp urlpath:%s err\n", reqmsg->hdrs.startline.reqline.uri.abspath);
 		rtsp_msg_set_response(resmsg, 461);
@@ -1192,6 +1227,9 @@ static int rtsp_handle_TEARDOWN (struct rtsp_client_connection *cc, const rtsp_m
 		rtsp_del_rtp_connection(cc, 0);
 	} else if (rtsp_path_match(apath, reqmsg->hdrs.startline.reqline.uri.abspath)) {
 		rtsp_del_rtp_connection(cc, 1);
+	} else if (rtsp_path_match(s->path, reqmsg->hdrs.startline.reqline.uri.abspath) &&
+		   rtsp_streamid_match(reqmsg->hdrs.startline.reqline.uri.abspath, 0)) {
+		rtsp_del_rtp_connection(cc, 1);
 	} else {
 		rtsp_del_rtp_connection(cc, 0);
 		rtsp_del_rtp_connection(cc, 1);
@@ -1199,6 +1237,103 @@ static int rtsp_handle_TEARDOWN (struct rtsp_client_connection *cc, const rtsp_m
 	if (!cc->vrtp && !cc->artp) {
 		cc->state = RTSP_CC_STATE_INIT;
 	}
+	return 0;
+}
+
+static int rtsp_handle_ANNOUNCE (struct rtsp_client_connection *cc, const rtsp_msg_s *reqmsg, rtsp_msg_s *resmsg)
+{
+	(void)cc;
+	(void)reqmsg;
+	(void)resmsg;
+	dbg("\n");
+	return 0;
+}
+
+static int rtsp_handle_RECORD (struct rtsp_client_connection *cc, const rtsp_msg_s *reqmsg, rtsp_msg_s *resmsg)
+{
+	(void)reqmsg;
+	(void)resmsg;
+	dbg("\n");
+
+	if (cc->state != RTSP_CC_STATE_READY && cc->state != RTSP_CC_STATE_RECORDING) {
+		rtsp_msg_set_response(resmsg, 455);
+		warn("rtsp status err\n");
+		return 0;
+	}
+
+	cc->state = RTSP_CC_STATE_RECORDING;
+	return 0;
+}
+
+static int rtsp_process_audio_rtp (struct rtsp_client_connection *cc, const uint8_t *data, int len)
+{
+	struct rtsp_session *s = cc->session;
+	int csrc_count;
+	int header_len;
+	int ext_len = 0;
+	int payload_len;
+	uint32_t timestamp;
+	int payload_type;
+	const uint8_t *payload;
+
+	if (!s || !s->audio_rx_hook || !data || len < 12) {
+		return 0;
+	}
+
+	if ((data[0] >> 6) != 2) {
+		return -1;
+	}
+
+	csrc_count = data[0] & 0x0F;
+	header_len = 12 + csrc_count * 4;
+	if (header_len > len) {
+		return -1;
+	}
+
+	if (data[0] & 0x10) {
+		if (header_len + 4 > len) {
+			return -1;
+		}
+		ext_len = (((int)data[header_len + 2] << 8) | data[header_len + 3]) * 4;
+		header_len += 4 + ext_len;
+		if (header_len > len) {
+			return -1;
+		}
+	}
+
+	payload_type = data[1] & 0x7F;
+
+	timestamp = ((uint32_t)data[4] << 24) |
+		    ((uint32_t)data[5] << 16) |
+		    ((uint32_t)data[6] << 8) |
+		    (uint32_t)data[7];
+	payload = data + header_len;
+	payload_len = len - header_len;
+	if (payload_len <= 0) {
+		return 0;
+	}
+
+	return s->audio_rx_hook(s->audio_rx_opaque, payload, payload_len, timestamp, payload_type);
+}
+
+static int rtsp_process_interleaved_frame (struct rtsp_client_connection *cc, const rtsp_msg_s *msg)
+{
+	const rtsp_msg_interleaved_line_s *inter = &msg->hdrs.startline.interline;
+	const uint8_t *body = (const uint8_t *)msg->body.body;
+
+	if (cc->artp && inter->channel == (uint8_t)cc->artp->tcp_interleaved[0]) {
+		return rtsp_process_audio_rtp(cc, (const uint8_t *)msg->body.body, inter->length);
+	}
+
+	if (cc->artp && cc->state == RTSP_CC_STATE_RECORDING && inter->length >= 2) {
+		uint8_t pt = body[1] & 0x7F;
+		if (pt >= 72 && pt <= 76) {
+			return 0;
+		}
+
+		return rtsp_process_audio_rtp(cc, (const uint8_t *)msg->body.body, inter->length);
+	}
+
 	return 0;
 }
 
@@ -1268,10 +1403,21 @@ static int rtsp_process_request (struct rtsp_client_connection *cc, const rtsp_m
 			if (rtsp_authorization_request(cc, reqmsg, resmsg))
 				return 0;
 			return rtsp_handle_PLAY(cc, reqmsg, resmsg);
+		case RTSP_MSG_METHOD_ANNOUNCE:
+			if (rtsp_authorization_request(cc, reqmsg, resmsg))
+				return 0;
+			return rtsp_handle_ANNOUNCE(cc, reqmsg, resmsg);
+		case RTSP_MSG_METHOD_RECORD:
+			if (rtsp_authorization_request(cc, reqmsg, resmsg))
+				return 0;
+			return rtsp_handle_RECORD(cc, reqmsg, resmsg);
 		case RTSP_MSG_METHOD_TEARDOWN:
 			if (rtsp_authorization_request(cc, reqmsg, resmsg))
 				return 0;
 			return rtsp_handle_TEARDOWN(cc, reqmsg, resmsg);
+		case RTSP_MSG_METHOD_SET_PARAMETER:
+		case RTSP_MSG_METHOD_GET_PARAMETER:
+			return 0;
 		default:
 			break;
 	}
@@ -1454,7 +1600,7 @@ static int rtsp_recv_rtp_over_udp (struct rtsp_client_connection *cc, int isaudi
 	struct rtp_connection *rtp = isaudio ? cc->artp : cc->vrtp;
 	struct sockaddr_in inaddr;
 	SOCKLEN addrlen = sizeof(inaddr);
-	char szbuf[128];
+	char szbuf[2048];
 	int  len;
 
 	len = recvfrom(rtp->udp_sockfd[0], szbuf, sizeof(szbuf), MSG_DONTWAIT, (struct sockaddr*)&inaddr, &addrlen);
@@ -1476,7 +1622,9 @@ static int rtsp_recv_rtp_over_udp (struct rtsp_client_connection *cc, int isaudi
 		rtp->udp_peerport[0] = ntohs(inaddr.sin_port);
 	}
 
-	//TODO process rtp frame
+	if (isaudio) {
+		return rtsp_process_audio_rtp(cc, (const uint8_t *)szbuf, len);
+	}
 	return len;
 }
 
@@ -1724,10 +1872,10 @@ int rtsp_do_event (rtsp_demo_handle demo)
 		if (cc->sockfd > maxfd)
 			maxfd = cc->sockfd;
 
-		if (cc->state != RTSP_CC_STATE_PLAYING)
+		if (cc->state != RTSP_CC_STATE_PLAYING && cc->state != RTSP_CC_STATE_RECORDING)
 			continue;
 
-		if (vrtp && streamq_inused(s->vstreamq, vrtp->streamq_index) > 0) {
+		if (cc->state == RTSP_CC_STATE_PLAYING && vrtp && streamq_inused(s->vstreamq, vrtp->streamq_index) > 0) {
 			//add video rtp sock to wfds
 			if (vrtp->is_over_tcp) {
 				FD_SET(cc->sockfd, &wfds);
@@ -1738,7 +1886,7 @@ int rtsp_do_event (rtsp_demo_handle demo)
 			}
 		}
 
-		if (artp && streamq_inused(s->astreamq, artp->streamq_index) > 0) {
+		if (cc->state == RTSP_CC_STATE_PLAYING && artp && streamq_inused(s->astreamq, artp->streamq_index) > 0) {
 			//add audio rtp sock to wfds
 			if (artp->is_over_tcp) {
 				FD_SET(cc->sockfd, &wfds);
@@ -1812,7 +1960,7 @@ int rtsp_do_event (rtsp_demo_handle demo)
 				}
 
 				if (reqmsg.type == RTSP_MSG_TYPE_INTERLEAVED) {
-					//TODO process RTCP over TCP frame
+					rtsp_process_interleaved_frame(cc1, &reqmsg);
 					rtsp_msg_free(&reqmsg);
 					continue;
 				}
@@ -1838,10 +1986,10 @@ int rtsp_do_event (rtsp_demo_handle demo)
 				continue;
 		}
 
-		if (cc1->state != RTSP_CC_STATE_PLAYING)
+		if (cc1->state != RTSP_CC_STATE_PLAYING && cc1->state != RTSP_CC_STATE_RECORDING)
 			continue;
 
-		if (vrtp && streamq_inused(s->vstreamq, vrtp->streamq_index) > 0) {
+		if (cc1->state == RTSP_CC_STATE_PLAYING && vrtp && streamq_inused(s->vstreamq, vrtp->streamq_index) > 0) {
 			//send rtp video packet
 			if (vrtp->is_over_tcp && FD_ISSET(cc1->sockfd, &wfds)) {
 				rtsp_tx_video_packet(cc1);
@@ -1852,7 +2000,7 @@ int rtsp_do_event (rtsp_demo_handle demo)
 			}
 		}
 
-		if (artp && streamq_inused(s->astreamq, artp->streamq_index) > 0) {
+		if (cc1->state == RTSP_CC_STATE_PLAYING && artp && streamq_inused(s->astreamq, artp->streamq_index) > 0) {
 			//send rtp audio packet
 			if (artp->is_over_tcp && FD_ISSET(cc1->sockfd, &wfds)) {
 				rtsp_tx_audio_packet(cc1);

@@ -38,6 +38,7 @@ enum rtsp_auth_type {
 
 typedef void * rtsp_demo_handle;
 typedef void * rtsp_session_handle;
+typedef int (*rtsp_rx_audio_hook)(void *opaque, const uint8_t *frame, int len, uint32_t timestamp, int payload_type);
 
 rtsp_demo_handle rtsp_new_demo (int port);
 int rtsp_do_event (rtsp_demo_handle demo);
@@ -45,6 +46,7 @@ rtsp_session_handle rtsp_new_session (rtsp_demo_handle demo, const char *path);
 int rtsp_set_auth (rtsp_session_handle session, int type, const char *user, const char *passwd);
 int rtsp_set_video (rtsp_session_handle session, int codec_id, const uint8_t *codec_data, int data_len);
 int rtsp_set_audio (rtsp_session_handle session, int codec_id, const uint8_t *codec_data, int data_len);
+int rtsp_set_audio_rx_hook (rtsp_session_handle session, rtsp_rx_audio_hook hook, void *opaque);
 int rtsp_tx_video (rtsp_session_handle session, const uint8_t *frame, int len, uint64_t ts);
 int rtsp_tx_audio (rtsp_session_handle session, const uint8_t *frame, int len, uint64_t ts);
 void rtsp_del_session (rtsp_session_handle session);
