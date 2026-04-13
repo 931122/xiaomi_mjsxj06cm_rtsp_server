@@ -303,7 +303,7 @@ static int rtsp_msg_parse_startline (rtsp_msg_s *msg, const char *line)
 
 	msg->type = RTSP_MSG_TYPE_INTERLEAVED;
 	msg->hdrs.startline.interline.channel = *((uint8_t*)(p+1));
-	msg->hdrs.startline.interline.length = *((uint16_t*)(p+2)); //XXX
+	msg->hdrs.startline.interline.length = ((uint16_t)(p[2]) << 8) | (uint16_t)(p[3]);
 	msg->hdrs.startline.interline.reserved = 0;
 	return 0;
 }
@@ -1193,8 +1193,9 @@ int rtsp_msg_set_date (rtsp_msg_s *msg, const char *date)
 		strncpy(msg->hdrs.date->http_date, date, sizeof(msg->hdrs.date->http_date) - 1);
 	} else {
 		time_t tt = time(NULL);
-		strftime(msg->hdrs.date->http_date, sizeof(msg->hdrs.date->http_date), 
- 				"%a, %b %d %Y %H:%M:%S GMT", gmtime(&tt));
+		struct tm tm_buf;
+		strftime(msg->hdrs.date->http_date, sizeof(msg->hdrs.date->http_date),
+				"%a, %b %d %Y %H:%M:%S GMT", gmtime_r(&tt, &tm_buf));
 	}
 	return 0;
 }

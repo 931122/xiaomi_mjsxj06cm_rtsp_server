@@ -197,8 +197,10 @@ int rtp_enc_aac (rtp_enc *e, const uint8_t *frame, int len, uint64_t ts, uint8_t
 	if (!e || !frame || len <= 0 || !packets || !pktsizs)
 		return -1;
 
-	//drop fff
-	if (frame[0] == 0xff && (frame[1] & 0xf0) == 0xf0) {
+	// drop ADTS header when present
+	if (len >= 2 && frame[0] == 0xff && (frame[1] & 0xf0) == 0xf0) {
+		if (len < 7)
+			return -1;
 		frame += 7;
 		len   -= 7;
 	}
@@ -258,7 +260,7 @@ int rtp_enc_g711 (rtp_enc *e, const uint8_t *frame, int len, uint64_t ts, uint8_
 		hdr->p = 0;
 		hdr->x = 0;
 		hdr->cc = 0;
-		hdr->m = (e->seq == 0);
+		hdr->m = (len <= pktsiz - RTPHDR_SIZE) ? 1 : 0;
 		hdr->pt = e->pt;
 		hdr->seq = htons(e->seq++);
 		hdr->ts  = htonl(rtp_ts);

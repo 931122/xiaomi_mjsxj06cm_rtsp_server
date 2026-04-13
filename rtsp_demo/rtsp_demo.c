@@ -125,7 +125,7 @@ struct rtp_connection
 #define RTSP_REQBUF_MAX_SIZ	 (1024)
 //#define RTSP_RESBUF_MAX_SIZ	 (1024)
 #if (RTP_MAX_PKTSIZ+4 < RTSP_REQBUF_MAX_SIZ)
-  #define RTSP_RESBUF_MAX_SIZ   (RTSP_REQ_BUF_MAX_SIZ)
+  #define RTSP_RESBUF_MAX_SIZ   (RTSP_REQBUF_MAX_SIZ)
 #else
   #define RTSP_RESBUF_MAX_SIZ   (RTP_MAX_PKTSIZ+4)
 #endif
@@ -553,8 +553,8 @@ int rtsp_set_auth (rtsp_session_handle session, int type, const char *user, cons
 				return -1;
 			}
 			s->auth_type = RTSP_AUTH_TYPE_BASIC;
-			strcpy(s->auth_user, user);
-			strcpy(s->auth_passwd, passwd);
+			snprintf(s->auth_user, sizeof(s->auth_user), "%s", user);
+			snprintf(s->auth_passwd, sizeof(s->auth_passwd), "%s", passwd);
 			break;
 		case RTSP_AUTH_TYPE_DIGEST:
 		default:
@@ -807,7 +807,7 @@ static int rtsp_authorization_request (struct rtsp_client_connection *cc, const 
 //	struct rtsp_demo *d = cc->demo;
 	struct rtsp_session *s = cc->session;
 
-	char basic_up[32] = "";
+	char basic_up[64] = "";
 	char basic_b64a[64] = "";
 	char basic_b64b[64] = "";
 
@@ -821,7 +821,7 @@ static int rtsp_authorization_request (struct rtsp_client_connection *cc, const 
 				rtsp_msg_set_response(resmsg, 401);//Unauthorized
 				return 1;
 			}
-			sprintf(basic_up, "%s:%s", s->auth_user, s->auth_passwd);
+			snprintf(basic_up, sizeof(basic_up), "%s:%s", s->auth_user, s->auth_passwd);
 			base64_encode(basic_b64b, sizeof(basic_b64b), (uint8_t*)basic_up, strlen(basic_up));
 			if (strcmp(basic_b64a, basic_b64b)) {
 				warn("authorization basic fail, my %s his %s. [peer %s:%u]\n", 
@@ -872,7 +872,7 @@ static int rtsp_handle_DESCRIBE (struct rtsp_client_connection *cc, const rtsp_m
 	int written;
 
 	dbg("\n");
-	if (rtsp_msg_get_accept(reqmsg, &accept) < 0 && !(accept & RTSP_MSG_ACCEPT_SDP)) {
+	if (rtsp_msg_get_accept(reqmsg, &accept) == 0 && !(accept & RTSP_MSG_ACCEPT_SDP)) {
 		rtsp_msg_set_response(resmsg, 406);
 		warn("client not support accept SDP\n");
 		return 0;
@@ -2076,7 +2076,7 @@ int rtsp_tx_video (rtsp_session_handle session, const uint8_t *frame, int len, u
 
 	switch (s->vcodec_id) {
 	case RTSP_CODEC_ID_VIDEO_H264:
-		if (s->vcodec_data.h264.pps_len == 0 || s->vcodec_data.h264.pps_len == 0) {
+		if (s->vcodec_data.h264.sps_len == 0 || s->vcodec_data.h264.pps_len == 0) {
 			if (rtsp_codec_data_parse_from_frame_h264(frame, len, &s->vcodec_data.h264) < 0) {
 				warn("rtsp_codec_data_parse_from_frame_h264 failed\n");
 			} else {
