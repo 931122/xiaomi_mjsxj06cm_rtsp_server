@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 
 #include "mi_audio_play.h"
+#include "mi_audio_codec.h"
 #include "mi_unix.h"
 
 static int mi_audio_play_send_frame(struct mi_audio_play_bridge *bridge, const uint8_t *payload)
@@ -113,9 +114,21 @@ int mi_audio_play_bridge_push(struct mi_audio_play_bridge *bridge, const uint8_t
 int mi_audio_play_rtsp_rx_hook(void *opaque, const uint8_t *frame, int len, uint32_t timestamp, int payload_type)
 {
 	struct mi_audio_play_bridge *bridge = (struct mi_audio_play_bridge *)opaque;
+	uint8_t converted[1024];
 
 	(void)timestamp;
-	(void)payload_type;
+
+	/*
+	 * Synology talkback commonly uses RTP PT 0 (PCMU/8000).
+	 * The Xiaomi device path expects A-law frames, so convert on ingress.
+	 */
+	if (payload_type == 0) {
+		int out_len = mi_mulaw_to_alaw_buffer(frame, len, converted, sizeof(converted));
+		if (out_len > 0) {
+			return mi_audio_play_bridge_push(bridge, converted, out_len);
+		}
+		return -1;
+	}
 
 	return mi_audio_play_bridge_push(bridge, frame, len);
 }

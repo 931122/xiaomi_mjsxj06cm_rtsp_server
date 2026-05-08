@@ -4,5 +4,6 @@
 #include <stdint.h>
 
 int mi_downsample_alaw_16k_to_8k(const uint8_t *src, int src_len, uint8_t *dst, int dst_cap);
+int mi_mulaw_to_alaw_buffer(const uint8_t *src, int src_len, uint8_t *dst, int dst_cap);
 
 #endif
