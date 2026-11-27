@@ -1366,10 +1366,14 @@ static int rtsp_process_audio_rtp (struct rtsp_client_connection *cc, const uint
 	int csrc_count;
 	int header_len;
 	int ext_len = 0;
+	int pad_len = 0;
 	int payload_len;
+	uint16_t seq;
 	uint32_t timestamp;
 	int payload_type;
 	const uint8_t *payload;
+	static uint32_t rx_pkt_cnt = 0;
+	static int last_pt = -1;
 
 	if (!s || !s->audio_rx_hook || !data || len < 12) {
 		return 0;
@@ -1377,6 +1381,11 @@ static int rtsp_process_audio_rtp (struct rtsp_client_connection *cc, const uint
 
 	if ((data[0] >> 6) != 2) {
 		return -1;
+	}
+
+	/* Ignore RTCP packets if muxed on the RTP port (PT 200..204 -> &0x7F = 72..76). */
+	if (data[1] >= 192 && data[1] <= 210) {
+		return 0;
 	}
 
 	csrc_count = data[0] & 0x0F;
@@ -1396,16 +1405,35 @@ static int rtsp_process_audio_rtp (struct rtsp_client_connection *cc, const uint
 		}
 	}
 
-	payload_type = data[1] & 0x7F;
+	if (data[0] & 0x20) {
+		pad_len = data[len - 1];
+		if (pad_len <= 0 || header_len + pad_len > len) {
+			return -1;
+		}
+	}
 
+	payload_type = data[1] & 0x7F;
+	/* Ignore RFC 3389 Comfort Noise (PT 13). */
+	if (payload_type == 13) {
+		return 0;
+	}
+
+	seq = ((uint16_t)data[2] << 8) | (uint16_t)data[3];
 	timestamp = ((uint32_t)data[4] << 24) |
 		    ((uint32_t)data[5] << 16) |
 		    ((uint32_t)data[6] << 8) |
 		    (uint32_t)data[7];
 	payload = data + header_len;
-	payload_len = len - header_len;
+	payload_len = len - header_len - pad_len;
 	if (payload_len <= 0) {
 		return 0;
+	}
+
+	rx_pkt_cnt++;
+	if (payload_type != last_pt || (rx_pkt_cnt % 100) == 1) {
+		info("RX audio RTP #%u: pt=%d seq=%u ts=%u plen=%d\n",
+		     rx_pkt_cnt, payload_type, seq, timestamp, payload_len);
+		last_pt = payload_type;
 	}
 
 	return s->audio_rx_hook(s->audio_rx_opaque, payload, payload_len, timestamp, payload_type);
