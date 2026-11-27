@@ -1,0 +1,13 @@
+/.depend
+/SDK/
+/gsoap-2.8/
+/generated/
+/*.o
+/src/*.o
+/*.log
+/*.pid
+/RECV.log
+/SENT.log
+/TEST.log
+/onvif_srvd
+/mi_ptz_control
