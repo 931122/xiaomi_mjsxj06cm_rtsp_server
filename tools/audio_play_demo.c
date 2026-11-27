@@ -213,7 +213,7 @@ static int unix_sock_connect(const char *path)
 static unsigned char linear_to_alaw(int pcm_val)
 {
 	static const int seg_end[8] = {
-		0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF
+		0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF
 	};
 	int mask;
 	int seg;
@@ -226,8 +226,8 @@ static unsigned char linear_to_alaw(int pcm_val)
 		pcm_val = -pcm_val - 1;
 	}
 
-	if (pcm_val > 0x0FFF) {
-		pcm_val = 0x0FFF;
+	if (pcm_val > 0x7FFF) {
+		pcm_val = 0x7FFF;
 	}
 
 	for (seg = 0; seg < 8; seg++) {

@@ -212,6 +212,12 @@ typedef struct __rtsp_msg_user_agent_s
 	char user_agent[64];
 } rtsp_msg_user_agent_s;
 
+//Require R opt. all (e.g. www.onvif.org/ver20/backchannel)
+typedef struct __rtsp_msg_require_s
+{
+	char require[64];
+} rtsp_msg_require_s;
+
 //Public r opt. all
 typedef struct __rtsp_msg_public_s
 {
@@ -266,6 +272,12 @@ typedef struct __rtsp_msg_content_type_s
 	rtsp_msg_content_type_e type;
 } rtsp_msg_content_type_s;
 
+//Content-Base r opt. DESCRIBE
+typedef struct __rtsp_msg_content_base_s
+{
+	char content_base[128];
+} rtsp_msg_content_base_s;
+
 //for QuickTime Player
 //x-Accept-Dynamic-Rate r opt. DESCRIBE
 typedef struct __rtsp_msg_x_accept_dynamic_rate
@@ -300,6 +312,7 @@ typedef struct __rtsp_msg_hdr_s
 	rtsp_msg_accept_s *accept;
 	rtsp_msg_auth_s *auth;
 	rtsp_msg_user_agent_s *user_agent;
+	rtsp_msg_require_s *require;
 
 	//response-headers
 	rtsp_msg_public_s *public_;
@@ -309,6 +322,7 @@ typedef struct __rtsp_msg_hdr_s
 	rtsp_msg_x_accept_dynamic_rate *x_accept_dynamic_rate; //for QuickTime Player
 
 	//entity-headers
+	rtsp_msg_content_base_s *content_base;
 	rtsp_msg_content_length_s *content_length;
 	rtsp_msg_content_type_s *content_type;
 } rtsp_msg_hdr_s;
@@ -358,12 +372,14 @@ int rtsp_msg_get_accept (const rtsp_msg_s *msg, uint32_t *accept);
 int rtsp_msg_set_accept (rtsp_msg_s *msg, uint32_t accept);
 int rtsp_msg_get_user_agent (const rtsp_msg_s *msg, char *user_agent, int len);
 int rtsp_msg_set_user_agent (rtsp_msg_s *msg, const char *user_agent);
+int rtsp_msg_get_require (const rtsp_msg_s *msg, char *require, int len);
 int rtsp_msg_get_public (const rtsp_msg_s *msg, uint32_t *public_);
 int rtsp_msg_set_public (rtsp_msg_s *msg, uint32_t public_);
 int rtsp_msg_get_server (const rtsp_msg_s *msg, char *server, int len);
 int rtsp_msg_set_server (rtsp_msg_s *msg, const char *server);
 int rtsp_msg_get_content_type (const rtsp_msg_s *msg, int *type);
 int rtsp_msg_set_content_type (rtsp_msg_s *msg, int type);
+int rtsp_msg_set_content_base (rtsp_msg_s *msg, const char *content_base);
 int rtsp_msg_get_content_length (const rtsp_msg_s *msg, int *length);
 int rtsp_msg_set_content_length (rtsp_msg_s *msg, int length);
 int rtsp_msg_get_auth_basic (const rtsp_msg_s *msg, char *basic_b64, int len);

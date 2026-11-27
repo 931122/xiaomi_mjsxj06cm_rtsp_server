@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "rtsp_demo.h"
+#include "mi_audio_codec.h"
 
 #define MI_AUDIO_PLAY_FRAME_SIZE 640
 
@@ -12,6 +13,7 @@ struct mi_audio_play_bridge {
 	uint8_t pending[MI_AUDIO_PLAY_FRAME_SIZE];
 	int pending_len;
 	const char *socket_path;
+	struct mi_alaw_upsampler upsampler;
 };
 
 void mi_audio_play_bridge_init(struct mi_audio_play_bridge *bridge, const char *socket_path);

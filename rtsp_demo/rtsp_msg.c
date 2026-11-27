@@ -412,7 +412,7 @@ static int rtsp_msg_parse_transport (rtsp_msg_s *msg, const char *line)
 	}
 
 	if ((p=strstr(line, "interleaved="))) {
-		if (sscanf(p, "interleaved=%u-%*u", &tmp) == 1) {
+		if (sscanf(p, "interleaved=%u-%*u", &tmp) == 1 || sscanf(p, "interleaved=%u", &tmp) == 1) {
 			hdrs->transport->flags |= RTSP_MSG_TRANSPORT_FLAG_INTERLEAVED;
 			hdrs->transport->interleaved = tmp;
 		}
@@ -585,11 +585,15 @@ static int rtsp_msg_parse_##_name (rtsp_msg_s *msg, const char *line) \
 		err("rtsp_mem_alloc for %s failed\n", #_type); \
 		return -1; \
 	} \
-	if (sscanf(line, _fmt, &hdrs->_name->_param) != 1) { \
-		rtsp_mem_free(hdrs->_name); \
-		hdrs->_name = NULL; \
-		err("parse %s failed. line: %s\n", #_name, line); \
-		return -1; \
+	{ \
+		const char *colon = strchr(line, ':'); \
+		const char *val_fmt = strchr(_fmt, ':'); \
+		if (!colon || !val_fmt || sscanf(colon + 1, val_fmt + 1, &hdrs->_name->_param) != 1) { \
+			rtsp_mem_free(hdrs->_name); \
+			hdrs->_name = NULL; \
+			err("parse %s failed. line: %s\n", #_name, line); \
+			return -1; \
+		} \
 	} \
 	return 0; \
 } \
@@ -650,6 +654,8 @@ static int rtsp_msg_build_##_name (const rtsp_msg_s *msg, char *line, int size) 
 
 DEFINE_PARSE_BUILD_LIKE_SERVER(server, rtsp_msg_server_s, server, "Server: %s")
 DEFINE_PARSE_BUILD_LIKE_SERVER(user_agent, rtsp_msg_user_agent_s, user_agent, "User-Agent: %s")
+DEFINE_PARSE_BUILD_LIKE_SERVER(require, rtsp_msg_require_s, require, "Require: %s")
+DEFINE_PARSE_BUILD_LIKE_SERVER(content_base, rtsp_msg_content_base_s, content_base, "Content-Base: %s")
 DEFINE_PARSE_BUILD_LIKE_SERVER(date, rtsp_msg_date_s, http_date, "Date: %s")
 
 //like Content-Type
@@ -795,10 +801,12 @@ static const rtsp_msg_str2parser_tbl_s rtsp_msg_hdr_line_parse_tbl[] = {
 	{15, "Authorization: ", rtsp_msg_parse_auth}, 
 	{19, "WWW-Authorization: ", rtsp_msg_parse_www_auth}, 
 	{12, "User-Agent: ", rtsp_msg_parse_user_agent}, 
+	{8, "Require:", rtsp_msg_parse_require}, 
 	{8, "Public: ", rtsp_msg_parse_public_}, 
 	{10, "RTP-Info: ", rtsp_msg_parse_rtp_info}, 
 	{8, "Server: ", rtsp_msg_parse_server}, 
 	{14, "Content-Type: ", rtsp_msg_parse_content_type}, 
+	{14, "Content-Base: ", rtsp_msg_parse_content_base}, 
 	{16, "Content-Length: ", rtsp_msg_parse_content_length}, 
 	{23, "x-accept-dynamic-rate: ", rtsp_msg_parse_x_accept_dynamic_rate}, 
 	{15, "x-dynamic-rate: ", rtsp_msg_parse_x_dynamic_rate}, 
@@ -811,7 +819,7 @@ static rtsp_msg_line_parser rtsp_msg_str2parser (const char *line)
 	int i;
 
 	for (i = 0; i < num; i++) {
-		if (strncmp(tbl[i].strval, line, tbl[i].strsiz) == 0)
+		if (strncasecmp(tbl[i].strval, line, tbl[i].strsiz) == 0)
 			return tbl[i].parser;
 	}
 	return NULL;
@@ -873,6 +881,8 @@ void rtsp_msg_free (rtsp_msg_s *msg)
 		rtsp_mem_free(msg->hdrs.www_auth);
 	if (msg->hdrs.user_agent) 
 		rtsp_mem_free(msg->hdrs.user_agent);
+	if (msg->hdrs.require)
+		rtsp_mem_free(msg->hdrs.require);
 
 	if (msg->hdrs.public_)
 		rtsp_mem_free(msg->hdrs.public_);
@@ -880,6 +890,8 @@ void rtsp_msg_free (rtsp_msg_s *msg)
 	if (msg->hdrs.server)
 		rtsp_mem_free(msg->hdrs.server);
 
+	if (msg->hdrs.content_base)
+		rtsp_mem_free(msg->hdrs.content_base);
 	if (msg->hdrs.content_type)
 		rtsp_mem_free(msg->hdrs.content_type);
 	if (msg->hdrs.content_length)
@@ -1090,11 +1102,13 @@ int rtsp_msg_build_to_array (const rtsp_msg_s *msg, void *data, int size)
 	MSG_BUILD_LINE(auth);
 	MSG_BUILD_LINE(www_auth);
 	MSG_BUILD_LINE(user_agent);
+	MSG_BUILD_LINE(require);
 
 	MSG_BUILD_LINE(public_);
 	MSG_BUILD_LINE(rtp_info);
 	MSG_BUILD_LINE(server);
 
+	MSG_BUILD_LINE(content_base);
 	MSG_BUILD_LINE(content_type);
 	MSG_BUILD_LINE(content_length);
 
@@ -1227,7 +1241,7 @@ int rtsp_msg_set_transport_tcp (rtsp_msg_s *msg, uint32_t ssrc, int interleaved)
 	if (!msg->hdrs.transport)
 		return -1;
 	msg->hdrs.transport->type = RTSP_MSG_TRANSPORT_TYPE_RTP_AVP_TCP;
-	msg->hdrs.transport->flags |= RTSP_MSG_TRANSPORT_FLAG_SSRC;
+	msg->hdrs.transport->flags |= RTSP_MSG_TRANSPORT_FLAG_SSRC | RTSP_MSG_TRANSPORT_FLAG_UNICAST;
 	msg->hdrs.transport->ssrc = ssrc;
 	if (interleaved >= 0) {
 		msg->hdrs.transport->flags |= RTSP_MSG_TRANSPORT_FLAG_INTERLEAVED;
@@ -1261,6 +1275,17 @@ int rtsp_msg_get_user_agent (const rtsp_msg_s *msg, char *user_agent, int len)
 		return -1;
 	if (user_agent)
 		strncpy(user_agent, msg->hdrs.user_agent->user_agent, len - 1);
+	return 0;
+}
+
+int rtsp_msg_get_require (const rtsp_msg_s *msg, char *require, int len)
+{
+	if (!msg->hdrs.require || len <= 0)
+		return -1;
+	if (require) {
+		strncpy(require, msg->hdrs.require->require, len - 1);
+		require[len - 1] = '\0';
+	}
 	return 0;
 }
 
@@ -1338,6 +1363,20 @@ int rtsp_msg_set_content_type (rtsp_msg_s *msg, int type)
 	if (!msg->hdrs.content_type)
 		return -1;
 	msg->hdrs.content_type->type = (rtsp_msg_content_type_e) type;
+	return 0;
+}
+
+int rtsp_msg_set_content_base (rtsp_msg_s *msg, const char *content_base)
+{
+	if (!msg->hdrs.content_base)
+		msg->hdrs.content_base = (rtsp_msg_content_base_s*) rtsp_mem_alloc(sizeof(rtsp_msg_content_base_s));
+	if (!msg->hdrs.content_base)
+		return -1;
+	if (content_base) {
+		strncpy(msg->hdrs.content_base->content_base, content_base,
+				sizeof(msg->hdrs.content_base->content_base) - 1);
+		msg->hdrs.content_base->content_base[sizeof(msg->hdrs.content_base->content_base) - 1] = '\0';
+	}
 	return 0;
 }
 
